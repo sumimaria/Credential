@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Blockchain Credential System</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.7.0/dist/ethers.umd.min.js"></script>
+</head>
+<body style="font-family: Arial; max-width: 700px; margin: auto;">
+
+<h2>Issue Credential</h2>
+Student ID: <input type="number" id="issueId"><br><br>
+Certificate: <input type="file" id="issueFile"><br><br>
+<button onclick="issueCredential()">Issue Credential</button>
+<p id="issueStatus"></p>
+
+<hr>
+
+<h2> Verify Credential</h2>
+Student ID: <input type="number" id="verifyId"><br><br>
+Certificate: <input type="file" id="verifyFile"><br><br>
+<button onclick="verifyCredential()">Verify Credential</button>
+<p id="verifyStatus"></p>
+
+<script>
+const contractAddress = "0xfd592a9C23a6E813A0D32900B1C803C2Be256d8C";
+const abi = [
+  "function issueCredential(uint256 id, bytes32 hash, string cid)",
+  "function studentCreds(uint256) view returns (bytes32 hash, string cid)"
+];
+
+// Add your Pinata keys here
+const PINATA_API_KEY = "Your_API_Key";
+const PINATA_SECRET = "Your_API_Secret";
+
+// ------------------ Helpers ------------------
+
+async function connectWallet() {
+
+  if (!window.ethereum) {
+    alert("Please install MetaMask!");
+    return;
+  }
+  const provider = new ethers.BrowserProvider(window.ethereum);
+  await provider.send("eth_requestAccounts", []);
+  return provider.getSigner();
+
+}
+
+async function hashFile(file) {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  return "0x" + [...new Uint8Array(hashBuffer)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function uploadToIPFS(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+    method: "POST",
+    headers: {
+      pinata_api_key: PINATA_API_KEY,
+      pinata_secret_api_key: PINATA_SECRET
+    },
+    body: formData
+  });
+
+  const data = await res.json();
+  return data.IpfsHash;
+}
+
+// ------------------ Issue ------------------
+async function issueCredential() {
+  try {
+    const id = document.getElementById("issueId").value;
+    const file = document.getElementById("issueFile").files[0];
+    if (!id || !file) return alert("Missing inputs");
+
+    if (!window.ethereum) return alert("MetaMask not found");
+
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    const signer = await provider.getSigner();
+
+    const contract = new ethers.Contract(contractAddress, abi, signer);
+
+    document.getElementById("issueStatus").innerText = "Hashing file...";
+    const hash = await hashFile(file);
+
+    document.getElementById("issueStatus").innerText = "Uploading to IPFS...";
+    const cid = await uploadToIPFS(file);
+
+    document.getElementById("issueStatus").innerText = "Sending transaction...";
+    const tx = await contract.issueCredential(id, hash, cid);
+    await tx.wait();
+
+    document.getElementById("issueStatus").innerText =
+      `Credential issued!\nCID: ${cid}`;
+  } catch (err) {
+    console.error(err);
+    document.getElementById("issueStatus").innerText = "X" + err.message;
+  }
+}
+
+
+
+// ------------------ Verify ------------------
+
+async function verifyCredential() {
+  try {
+    const id = document.getElementById("verifyId").value;
+    const file = document.getElementById("verifyFile").files[0];
+    if (!id || !file) return alert("Missing inputs");
+
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const contract = new ethers.Contract(contractAddress, abi, provider);
+
+    document.getElementById("verifyStatus").innerText = "Hashing...";
+    const localHash = await hashFile(file);
+
+    document.getElementById("verifyStatus").innerText = "Fetching blockchain record...";
+    const record = await contract.studentCreds(id);
+
+    if (record.hash === ethers.ZeroHash) {
+      document.getElementById("verifyStatus").innerText = "❌ No credential found";
+      return;
+    }
+
+    if (localHash.toLowerCase() === record.hash.toLowerCase()) {
+      document.getElementById("verifyStatus").innerText =
+        `✅ Credential is VALID\nIPFS CID: ${record.cid}`;
+    } else {
+      document.getElementById("verifyStatus").innerText =
+        "❌ Credential is INVALID / TAMPERED";
+    }
+  } catch (err) {
+    console.error(err);
+    document.getElementById("verifyStatus").innerText = "❌ Verification error";
+  }
+}
+</script>
+
+</body>
+</html>
